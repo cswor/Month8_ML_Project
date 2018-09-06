@@ -1,0 +1,175 @@
+---
+title: "Machine Learning - Fitness Peer Project"
+author: Carl
+date: September 5, 2018
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("D:/Coursera/JH_DataScience/Month8/PA_Project")
+library(caret)
+library(parallel)
+library(doParallel)
+```
+
+##Executive Summary
+
+Our goal is to develop a predictor for how well exercises are performed. The predictor is based upon data from the HAR project at http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har#weight_lifting_exercises. Data was collected from the activities of six individuals.
+
+
+##Data Exploration
+```{r dataproc, echo=F,cache=T}
+setwd("D:/Coursera/JH_DataScience/Month8/PA_Project")
+train <- read.csv("./pml-training.csv",stringsAsFactors = F,na.strings = c(".","","NA"," "))
+test <- read.csv("./pml-testing.csv",stringsAsFactors = F)
+inTrain <- createDataPartition(y=train$classe, p=0.75, list=FALSE)
+training <- train[inTrain,]
+validation <- train[-inTrain,]
+keepers <- c("cvtd_timestamp","new_window","num_window","roll_belt","pitch_belt",
+             "yaw_belt","total_accel_belt","gyros_belt_x","gyros_belt_y","gyros_belt_z","accel_belt_x","accel_belt_y","accel_belt_z",
+             "magnet_belt_x","magnet_belt_y","magnet_belt_z","roll_arm","pitch_arm","yaw_arm","total_accel_arm","gyros_arm_x","gyros_arm_y",
+             "gyros_arm_z","accel_arm_x","accel_arm_y","accel_arm_z","magnet_arm_x","magnet_arm_y","magnet_arm_z","roll_dumbbell","pitch_dumbbell",
+             "yaw_dumbbell","total_accel_dumbbell","gyros_dumbbell_x","gyros_dumbbell_y","gyros_dumbbell_z","accel_dumbbell_x","accel_dumbbell_y",
+             "accel_dumbbell_z","magnet_dumbbell_x","magnet_dumbbell_y","magnet_dumbbell_z","roll_forearm","pitch_forearm","yaw_forearm",
+             "total_accel_forearm","gyros_forearm_x","gyros_forearm_y","gyros_forearm_z","accel_forearm_x","accel_forearm_y","accel_forearm_z",
+             "magnet_forearm_x","magnet_forearm_y","magnet_forearm_z","classe")
+s <- training[,keepers]
+v <- validation[,keepers]
+s$classe <- factor(s$classe)
+v$classe <- factor(v$classe)
+
+```
+The available data included a training dataset with 19,622 records with 160 varialbes, and a test dataset consisting of 20 records of 160 variables. The dependent variable, classe, is not included in the test dataset. As a consequence, we will be able to predict but not get a final accuracy in our test data.
+
+Initial examination of the data reveals that there are many missing data items. Complete cases gives an initial look at this:
+
+```{r echo=F}
+#setwd("D:/Coursera/JH_DataScience/Month8/PA_Project")
+cmplt <- train[complete.cases(train),]
+pct = round(((nrow(cmplt)/nrow(train))) * 100,2)
+txt = paste("Percents dataset complete = ",pct)
+txt = paste(txt," or ")
+txt = paste(txt, nrow(cmplt))
+txt = paste(txt , " of the original ")
+txt = paste(txt, nrow(train))
+txt = paste(txt, " rows")
+print(txt)
+```
+
+After examining the rows with missing data, it was found that 104 variables (columns) of the original 160 had such a large number of missing data that I did not feel it would benefit the analysis to try impute these values. Therefore, I reduced the dataset to 56 variables. 
+
+##The Analysis
+
+The problem is one of classification. Several models are suitbable: gbm, rpart, and random forests. Each approach will be applied to our training data. In each case, we will use the train method from caret with trainControl providing controls for cross validation and parallel processing. These can take a lot of CPU time without the parallel packages.
+
+In the absence of a test set with the classe variable included, a validation dataset was created from the training data using createDataPartition with 75% of the data devoted to training and 25% to a validation dataset which is used to check the results of our model fits.
+
+All classification models will use the same data and the same model (classe~.). Random numbers will be set for each different technique: 1) GBM seed = 200, Rpart seed = 300, and Random Forest seed = 500. To make run times better, the parallel and doParallel packages were used. Cross validation was done with trainControl method = "cv", number = 10, and allowParallel = TRUE. 
+
+###GBM 
+GBM produced the following results.
+```{r gbm, echo=F,cache=T}
+set.seed(200)
+gbmControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+capture.output(gbmFit <- train(data=s,factor(classe)~.,method="gbm",trControl = gbmControl))
+```
+
+Which produced the following overall accuracy and prediction results from the confusion matrix.
+```{r gbmacc,echo=F,cache=T}
+cm <- confusionMatrix(predict(gbmFit,s),factor(s$classe))
+print(cm$overall)
+print(cm$table)
+stopCluster(cluster)
+registerDoSEQ()
+```
+This results in the following accuracy and confusion matrix for the validation set.
+
+```{r gbmV,echo=F,cache=T}
+classe.pred <- predict(gbmFit,v)
+cm2 <- confusionMatrix(classe.pred,v$classe)
+print(cm2$overall)
+print(cm2$table)
+```
+
+###Rpart 
+Produced the following accuracy and prediction results from the confusion matrix.
+
+```{r rpart,echo=F,cache=T}
+set.seed(300)
+rpartControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+rpartFit <- train(data=s,factor(classe)~.,method="rpart",trControl = rpartControl)
+cmg <- confusionMatrix(predict(rpartFit,s),factor(s$classe))
+print(cmg$overall)
+print(cmg$table)
+stopCluster(cluster)
+registerDoSEQ()
+
+```
+
+Accuracy and confusion matrix on the validation data.
+```{r rpartv,echo=F,cache=T}
+rpart.predv <- predict(rpartFit,v)
+cmgv <- confusionMatrix(rpart.predv,v$classe)
+print(cmgv$overall)
+print(cmgv$table)
+
+```
+
+###Random Forest
+The final approach I will look at is a Random Forest.
+
+Accuracy and prediction results on our training data are: 
+```{r ranfor, echo=F,cache=T}
+#setwd("D:/Coursera/JH_DataScience/Month8/PA_Project")
+set.seed(500)
+rfControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+rfFit <- train(data=s,factor(classe)~.,method="rf",trControl = rfControl)
+cmrf <- confusionMatrix(predict(rfFit,s),factor(s$classe))
+print(cmrf$overall)
+print(cmrf$table)
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+Accuracy and prediction results on our validation data are:
+```{r rfv,echo=T,cache=T}
+rf.predv <- predict(rfFit,v)
+cmrfv <- confusionMatrix(rf.predv,v$classe)
+print(cmrfv$overall)
+print(cmrfv$table)
+```
+
+###Summary Results
+```{r sumtable,echo=F,cache=T}
+library(kableExtra)
+df.results <- data.frame(Method = c("GBM","RPART","RAND FOREST"),
+  TrainAccuracy = c(99.52,59.78,100.00),
+  ValidationAccuracy = c(99.47,58.26,99.76))
+                         
+kable(df.results,align = 'c')%>%
+  kable_styling()
+
+```
+
+##Conclusions
+The Summary Results table shows the comparision above, Random Forest produced the best accuracy and predictions on the training dataset resulting in 100% accuracy as seen in the confusion matrix for the training dataset with no missed predictions. It was almost as good on the validation dataset. GBM produced very good results but not as good as Random Forest. Rpart accuracy trails the other two approaches significantly with the other two over 99% and rpart near 60%.
+
+The predictions for the 20 elements of our test set, based on Random Forest will be left for the quiz. Accuracy on the test data is expected to be less than the accuracy of the model based on our training data.
+
+Since a validation dataset was used for an independent evaluation of the accuracy, I would expect very good results from the prediction of the test dataset. However, since we do not know how the test dataset was collected, the results may differ significantly.
